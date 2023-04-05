@@ -1,0 +1,30 @@
+[package]
+name = "http-fancy"
+version = "0.1.0"
+edition = "2021"
+description = "Fancy HTTP related utilities"
+readme = "README.md"
+repository = "https://github.com/DoumanAsh/http-fancy"
+license = "BSL-1.0"
+keywords = ["hyper", "http"]
+include = [
+    "**/*.rs",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+]
+
+[dependencies.http]
+version = "0.2.8"
+default-features = false
+
+[dependencies.http-body]
+version = "=1.0.0-rc.2"
+default-features = false
+
+[dependencies.bytes]
+version = "1"
+default-features = false
+
+[features]
+std = []
