@@ -170,6 +170,125 @@ impl Collector for Vec<u8> {
     }
 }
 
+#[cfg(feature = "compress")]
+enum DecompressState {
+    Uninit(Vec<u8>),
+    Plain(Vec<u8>),
+    Zstd(zstd::stream::write::Decoder<'static, Vec<u8>>),
+}
+
+#[cfg(feature = "compress")]
+///Smart body collector, that automatically de-compresses if it detects compression applied.
+///
+///Supported algorithms:
+///- `zstd`
+pub struct DecompressCollector {
+    state: DecompressState,
+}
+
+#[cfg(feature = "compress")]
+impl DecompressCollector {
+    const ZSTD_HEADER: [u8; 4] = 0xFD2FB528u32.to_le_bytes();
+
+    #[inline(always)]
+    ///Creates new instance
+    pub const fn new() -> Self {
+        Self {
+            state: DecompressState::Uninit(Vec::new())
+        }
+    }
+}
+
+#[cfg(feature = "compress")]
+#[derive(Debug)]
+///Decompression error
+pub enum DecompressError {
+    ///Zstd algorithm fail
+    Zstd(std::io::Error)
+}
+
+#[cfg(feature = "compress")]
+impl fmt::Display for DecompressError {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Zstd(error) => fmt.write_fmt(format_args!("Zstd({})", error)),
+        }
+    }
+}
+
+#[cfg(feature = "compress")]
+impl Collector for DecompressCollector {
+    type Output = Vec<u8>;
+    type Error = DecompressError;
+
+    #[inline(always)]
+    fn append(&mut self, data: bytes::Bytes) -> Option<Self::Error> {
+        use std::io::Write;
+
+        match &mut self.state {
+            DecompressState::Uninit(ref mut buffer) => {
+                buffer.extend_from_slice(&data);
+                if buffer.len() < Self::ZSTD_HEADER.len() {
+                    None
+                } else {
+                    if buffer.starts_with(&Self::ZSTD_HEADER) {
+                        match zstd::stream::write::Decoder::new(Vec::new()) {
+                            Ok(mut decoder) => match decoder.write_all(&buffer) {
+                                Ok(()) => {
+                                    self.state = DecompressState::Zstd(decoder);
+                                    None
+                                },
+                                Err(error) => Some(DecompressError::Zstd(error)),
+                            },
+                            Err(error) => Some(DecompressError::Zstd(error)),
+                        }
+                    } else {
+                        self.state = DecompressState::Plain(mem::take(buffer));
+                        None
+                    }
+                }
+            },
+            DecompressState::Plain(ref mut buffer) => {
+                buffer.extend_from_slice(&data);
+                None
+            },
+            DecompressState::Zstd(ref mut decoder) => match decoder.write_all(&data) {
+                Ok(()) => None,
+                Err(error) => Some(DecompressError::Zstd(error)),
+            },
+        }
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        match &self.state {
+            DecompressState::Uninit(buffer) => buffer.len(),
+            DecompressState::Plain(buffer) => buffer.len(),
+            DecompressState::Zstd(decoder) => decoder.get_ref().len(),
+        }
+    }
+
+    #[inline(always)]
+    fn on_trailers(&mut self, _: http::HeaderMap) {
+    }
+
+    #[inline(always)]
+    fn consume(&mut self) -> Result<Self::Output, Self::Error> {
+        use std::io::Write;
+
+        let mut result = DecompressState::Uninit(Vec::new());
+        mem::swap(&mut result, &mut self.state);
+        match result {
+            DecompressState::Uninit(result) => Ok(result),
+            DecompressState::Plain(result) => Ok(result),
+            DecompressState::Zstd(mut decoder) => match decoder.flush() {
+                Ok(()) => Ok(decoder.into_inner()),
+                Err(error) => Err(DecompressError::Zstd(error))
+            }
+        }
+    }
+}
+
 ///Future that collects `HttpBody`
 ///
 ///## Arguments
@@ -177,12 +296,12 @@ impl Collector for Vec<u8> {
 ///- `T` - `HttpBody`
 ///- `C` - Collector that implements `Collector` interface
 ///- `S` - Size limit, when overflow happens, returns `Collect::Overflow` error
-pub struct Collect<T, C, const S: usize> {
+pub struct Collect<const S: usize, T, C> {
     body: T,
     collector: C,
 }
 
-impl<T, C, const S: usize> Collect<T, C, S> {
+impl<T, C, const S: usize> Collect<S, T, C> {
     ///Creates new instance
     pub fn new(body: T, collector: C) -> Self {
         Self {
@@ -192,7 +311,7 @@ impl<T, C, const S: usize> Collect<T, C, S> {
     }
 }
 
-impl<E, T: HttpBody<Data = bytes::Bytes, Error = E> + Unpin, C: Collector, const S: usize> Future for Collect<T, C, S> {
+impl<E, T: HttpBody<Data = bytes::Bytes, Error = E> + Unpin, C: Collector, const S: usize> Future for Collect<S, T, C> {
     type Output = Result<C::Output, CollectError<E, C::Error>>;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut task::Context<'_>) -> task::Poll<Self::Output> {

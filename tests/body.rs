@@ -48,7 +48,7 @@ fn call_future_once<T: Future + Unpin>(mut fut: T) -> T::Output {
 #[test]
 fn should_collect_small_body() {
     let body = "12".to_owned();
-    let result = Collect::<_, Vec<u8>, 2>::new(body, Vec::new());
+    let result = Collect::<2, _, _>::new(body, Vec::new());
     match call_future_once(result) {
         Ok(data) => assert_eq!(data, b"12"),
         Err(error) => panic!("Unexpected error: {error}"),
@@ -58,10 +58,22 @@ fn should_collect_small_body() {
 #[test]
 fn should_overflow_on_limit() {
     let body = "12".to_owned();
-    let result = Collect::<_, Vec<u8>, 1>::new(body, Vec::new());
+    let result = Collect::<1, _, _>::new(body, Vec::new());
     match call_future_once(result) {
         Err(CollectError::Overflow) => (),
         Err(error) => panic!("Unexpected error: {error}"),
         Ok(data) => panic!("Unexpected result: {:?}", data),
+    }
+}
+
+#[cfg(feature = "compress")]
+#[test]
+fn should_decompress_zstd() {
+    let body: http_fancy::body::Body = zstd::bulk::compress(b"123456789", 9).expect("To encode").into();
+
+    let result = Collect::<100, _, _>::new(body, http_fancy::body::DecompressCollector::new());
+    match call_future_once(result) {
+        Ok(data) => assert_eq!(data, b"123456789"),
+        Err(error) => panic!("Unexpected error: {error}"),
     }
 }

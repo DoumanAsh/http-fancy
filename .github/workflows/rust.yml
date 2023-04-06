@@ -51,10 +51,10 @@ jobs:
         rustc --version
 
     - name: Check build
-      run: cargo clippy --features std
+      run: cargo clippy --features std,compress
 
     - name: Test
-      run: cargo test --features std
+      run: cargo test --features std,compress
 
     - name: Miri Test
       run: |

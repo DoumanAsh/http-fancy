@@ -26,5 +26,12 @@ default-features = false
 version = "1"
 default-features = false
 
+[dependencies.zstd]
+version = "0.12"
+default-features = false
+optional = true
+
 [features]
 std = []
+# Enables compression for body
+compress = ["zstd", "std"]
